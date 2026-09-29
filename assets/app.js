@@ -557,8 +557,29 @@ function barChart(past, uid) {
 // On retombe sur les présents en direct quand le total n'a pas été calculé
 // (attendees_total absent, ex. webinar non publié). Le tooltip détaille les deux
 // chiffres + le total. Axe Y en entiers à partir de 0. Points cliquables.
+// Une seule mesure ne fait pas une courbe : il n'y a rien à relier, et le graphe
+// s'affiche alors vide sauf un point flottant — on croit à un bug (c'est arrivé sur
+// « Guidance PF2027 » à sa première session). La bonne forme pour une valeur unique
+// est une TUILE : le nombre EST le graphique. La courbe revient d'elle-même dès la
+// deuxième session, et la mention l'annonce pour que l'absence soit lisible comme
+// un état normal et non comme une panne.
+function singleValueTile(value, label, sid) {
+  return `<div class="chart chart-single"${sid ? ` data-sid="${esc(sid)}"` : ""}>` +
+    stat(value, label) +
+    `<p class="muted single-hint">Une seule session passée : la courbe apparaîtra ` +
+    `à partir de la deuxième.</p></div>`;
+}
+
 function attendeesChart(past, uid) {
   if (!past.length) return `<p class="muted">Aucune session passée pour l'instant.</p>`;
+  if (past.length === 1) {
+    const s = past[0];
+    const quand = `session du ${fmtDate(s.estimated_started_at)}`;
+    return singleValueTile(intf(attTotal(s)), s.replay != null
+      ? `Participants — ${quand} · ${intf(s.attendees)} en direct, ` +
+        `${intf(s.replay)} en rattrapage`
+      : `Participants en direct — ${quand}`, s.session_id);
+  }
   const ag = gradId("attGrad", uid);
   const val = (s) => Math.max(0, attTotal(s));
   const maxV = Math.max(1, ...past.map(val));
@@ -620,6 +641,12 @@ function attendeesChart(past, uid) {
 function csatChart(past, uid) {
   const pts = past.filter((s) => s.csat && typeof s.csat === "object" && s.csat.score != null);
   if (!pts.length) return `<p class="muted">Pas encore de réponses de satisfaction.</p>`;
+  if (pts.length === 1) {              // même raison que pour attendeesChart
+    const s = pts[0], c = s.csat;
+    return singleValueTile(`${c.score}/${c.scale || 5}`,
+      `Satisfaction — session du ${fmtDate(s.estimated_started_at)} · ` +
+      `${intf(c.responses)} réponse(s)`, s.session_id);
+  }
   const cg = gradId("csatGrad", uid);
   const scale = pts[0].csat.scale || 5;
   const scores = pts.map((s) => s.csat.score);

@@ -207,6 +207,13 @@ h3 { font-size: 15px; font-weight: 700; margin: 30px 0 12px; color: var(--teal-d
   padding: 16px; box-shadow: var(--shadow);
 }
 .chart svg { width: 100%; height: auto; display: block; }
+/* Valeur unique : le nombre EST le graphique (une mesure ne fait pas une courbe).
+   Cliquable comme un point de la courbe — la carte porte data-sid. */
+.chart-single { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 20px; cursor: pointer; }
+.chart-single:hover { border-color: var(--green-light); }
+.chart-single .stat { background: var(--bg); min-width: 240px; }
+.chart-single .stat-v { font-size: 30px; }
+.single-hint { margin: 0; font-size: 12.5px; }
 /* Remplissage (fill) posé sur chaque élément avec un id de dégradé UNIQUE par
    webinar (cf. gradId dans app.js) — ne pas le figer ici, un id partagé casse le
    rendu quand l'onglet source passe en display:none dans la console admin. */
