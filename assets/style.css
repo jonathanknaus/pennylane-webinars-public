@@ -380,3 +380,12 @@ dialog.detail::backdrop { background: rgba(0, 61, 61, .42); backdrop-filter: blu
   border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px;
 }
 .fb-field select:focus { outline: 2px solid var(--green-light); outline-offset: 0; }
+
+/* Session dont la donnée a été corrigée à la main (Livestorm n'avait pas
+   enregistré la séance) : signalée pour ne jamais passer pour une mesure.
+   Le motif est en title= sur l'étiquette. */
+.corr {
+  font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px;
+  background: #fff6e0; color: #8a5d00; border: 1px solid #f0d492;
+  padding: 1px 6px; border-radius: 999px; cursor: help; vertical-align: middle;
+}

@@ -487,6 +487,7 @@ function renderWebinar(w, sessions, members) {
       ${kpi("Inscrits (cumul passé)", intf(totReg))}
       ${kpi("Inscrits (sessions à venir)", intf(totRegUp))}
       ${kpi("Inscrits (toutes sessions)", intf(totRegAll))}
+      ${audienceKpis(w.id)}
       ${kpi("Présents (cumul passé)", intf(totAtt))}
       ${/* « Présents » ne compte QUE le direct, alors que le taux ci-dessus porte sur
             l'audience direct ∪ replay : sans ce KPI, le taux n'est pas retrouvable à
@@ -679,6 +680,28 @@ function episodeTable(members, sessions) {
       <th class="num">CSAT</th>
     </tr></thead>
     <tbody>${body}</tbody></table></div>`;
+}
+
+// KPI d'audience DÉDOUBLONNÉE, affichés seulement si le calcul à la demande a été
+// lancé pour ce périmètre (bouton « 👥 Audience unique » de la console).
+// Raison d'être : les KPI « Inscrits » comptent des INSCRIPTIONS, pas des personnes
+// — sur la série Guidance, 9 281 inscriptions pour 2 444 personnes. Annoncer le
+// premier chiffre comme un nombre de participants le surestime d'un facteur 3,8.
+// Le nombre de cabinets vient d'un champ en TEXTE LIBRE : c'est une estimation, et
+// la note porte le taux de remplissage pour qu'on sache ce qu'elle vaut.
+function audienceKpis(scopeId) {
+  const a = ((state.data && state.data.audience) || {})[scopeId];
+  if (!a || !a.people) return "";
+  const quand = a.computed_at ? `au ${fmtDate(a.computed_at)}` : "";
+  let out = kpi("Personnes uniques", intf(a.people),
+    [quand, a.people_sum && a.people_sum > a.people
+      ? `${intf(a.people_sum)} inscriptions cumulées` : ""].filter(Boolean).join(" · "));
+  if (a.firms) {
+    const taux = a.firm_filled != null ? `${Math.round(a.firm_filled * 100)} % renseigné` : "";
+    out += kpi("Cabinets distincts", intf(a.firms),
+      ["estimation", taux, quand].filter(Boolean).join(" · "));
+  }
+  return out;
 }
 
 function kpi(label, value, note) {
@@ -889,10 +912,16 @@ function table(rows) {
     const dur = s.duration_min != null
       ? intf(s.duration_min) + " min" + (s.duration_anomaly ? " ⚠️" : "")
       : "—";
+    // Session corrigée à la main (Livestorm n'avait pas enregistré la séance) : on
+    // la signale, sinon le chiffre devient indiscernable d'une mesure. Le motif est
+    // en infobulle, et le détail direct/replay reste volontairement vide.
+    const corr = s.manual
+      ? ` <span class="corr" title="${esc(s.manual_reason || "donnée corrigée manuellement")}">corrigé</span>`
+      : "";
     return `<tr data-sid="${esc(s.session_id)}">
-      <td>${esc(fmtDateTime(s.estimated_started_at))}</td>
+      <td>${esc(fmtDateTime(s.estimated_started_at))}${corr}</td>
       <td class="num">${intf(s.registrants)}</td>
-      <td class="num">${intf(s.attendees)}</td>
+      <td class="num">${s.manual ? "—" : intf(s.attendees)}</td>
       <td class="num">${pct(s.attendance_rate)}</td>
       <td class="num">${dur}</td>
       <td class="num">${intf(s.questions)}</td>
