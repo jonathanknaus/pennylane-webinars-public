@@ -553,15 +553,20 @@ function renderSynthesis(webs, sessions) {
   if (byTeam[""].length) cols.push({ k: "", l: "Non attribué" });
   cols.push({ k: "__t", l: "Total" });
 
-  const idsOf = (k) => new Set((k === "__t" ? webs : byTeam[k]).map((w) => w.id));
+  // `actifs` = webinars ayant au moins une session dans la plage filtrée. C'est ce
+  // qu'on compte, et non le nombre d'attributions : sur un trimestre, « 10 webinars
+  // AFS » alors que trois seulement ont tourné induirait en erreur. Sans filtre, les
+  // deux chiffres coïncident.
+  const avecSession = new Set(sessions.map((s) => s.event_id));
   const data = cols.map((c) => {
-    const ids = idsOf(c.k);
-    return { ...c, ws: (c.k === "__t" ? webs : byTeam[c.k]),
+    const ws = c.k === "__t" ? webs : byTeam[c.k];
+    const ids = new Set(ws.map((w) => w.id));
+    return { ...c, ws, actifs: ws.filter((w) => avecSession.has(w.id)),
              st: aggStats(sessions.filter((s) => ids.has(s.event_id))) };
   });
 
   const lignes = [
-    ["Webinars", (d) => intf(d.ws.length)],
+    ["Webinars actifs sur la période", (d) => intf(d.actifs.length)],
     ["Taux de présence moyen", (d) => pct(d.st.rate), true],
     ["Inscrits (cumul passé)", (d) => intf(d.st.reg)],
     ["Inscrits (sessions à venir)", (d) => intf(d.st.regUp)],
