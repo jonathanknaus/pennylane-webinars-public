@@ -102,16 +102,55 @@ function buildControls() {
       <span class="fb-label">Filtrer par date</span>
       <label class="fb-field">Du <input type="date" id="f-from"></label>
       <label class="fb-field">au <input type="date" id="f-to"></label>
+      <label class="fb-field">ou trimestre
+        <select id="f-quarter"><option value="">— tous —</option></select>
+      </label>
       <button type="button" id="f-reset" class="fb-reset">Réinitialiser</button>
       <span class="fb-count" id="f-count"></span>
     </div>`;
   const from = host.querySelector("#f-from");
   const to = host.querySelector("#f-to");
+  const quarter = host.querySelector("#f-quarter");
+  // Le trimestre n'est qu'un raccourci : il POSE les deux bornes de date, et tout
+  // le reste (filtrage, KPI, synthèse) continue de ne connaître que ces bornes —
+  // une seule source de vérité, donc pas de divergence possible entre les deux.
+  for (const q of quartersOf(state.data)) {
+    const o = document.createElement("option");
+    o.value = `${q.from}|${q.to}`;
+    o.textContent = q.label;
+    quarter.appendChild(o);
+  }
   const apply = () => { state.from = from.value || null; state.to = to.value || null; render(); };
-  from.addEventListener("change", apply);
-  to.addEventListener("change", apply);
+  from.addEventListener("change", () => { quarter.value = ""; apply(); });
+  to.addEventListener("change", () => { quarter.value = ""; apply(); });
+  quarter.addEventListener("change", () => {
+    if (!quarter.value) { from.value = to.value = ""; } else {
+      const [a, b] = quarter.value.split("|");
+      from.value = a; to.value = b;
+    }
+    apply();
+  });
   host.querySelector("#f-reset").addEventListener("click", () => {
-    from.value = ""; to.value = ""; state.from = state.to = null; render();
+    from.value = ""; to.value = ""; quarter.value = ""; state.from = state.to = null; render();
+  });
+}
+
+// Trimestres réellement présents dans les données, du plus récent au plus ancien.
+// On ne propose que ceux qui existent : une liste figée afficherait des trimestres
+// vides, et en masquerait d'autres dès que l'historique s'étend.
+function quartersOf(data) {
+  const vus = new Set();
+  for (const s of ((data && data.sessions) || [])) {
+    const d = parseDate(sessionDate(s));
+    if (d) vus.add(`${d.getFullYear()}-${Math.floor(d.getMonth() / 3) + 1}`);
+  }
+  const pad = (n) => String(n).padStart(2, "0");
+  return [...vus].sort().reverse().map((k) => {
+    const [y, q] = k.split("-").map(Number);
+    const m0 = (q - 1) * 3 + 1;                  // 1, 4, 7, 10
+    const dernier = new Date(y, m0 + 2, 0).getDate();   // dernier jour du 3e mois
+    return { label: `T${q} ${y}`, from: `${y}-${pad(m0)}-01`,
+             to: `${y}-${pad(m0 + 2)}-${pad(dernier)}` };
   });
 }
 
@@ -150,6 +189,8 @@ function render() {
       app.appendChild(renderWebinar(v.webinar, sessions.filter((s) => s.event_id === v.webinar.id)));
     }
   }
+  // Synthèse cumulée par équipe : utile dès qu'il y a plus d'un webinar à cumuler.
+  if (webinars.length > 1) app.appendChild(renderSynthesis(webinars, sessions));
   // Dernier onglet : le verrou, tant que les webinars protégés ne sont pas
   // déchiffrés. Il disparaît de lui-même après déverrouillage (plus de blob).
   if (locked) app.appendChild(renderLock(locked));
@@ -472,6 +513,126 @@ function renderWebinar(w, sessions, members) {
     ${table(past.slice().reverse())}
   `;
   return sec;
+}
+
+// ---- synthèse cumulée AFS / SME ------------------------------------------
+// Agrégats d'un ensemble de sessions, avec EXACTEMENT les formules d'un rapport de
+// webinar (cf. renderWebinar) pour que les deux vues ne puissent pas diverger.
+function aggStats(sessions) {
+  const past = sessions.filter((s) => s.status === "past");
+  const up = sessions.filter((s) => s.status === "upcoming");
+  const reg = past.reduce((n, s) => n + (s.registrants || 0), 0);
+  const tot = past.reduce((n, s) => n + attTotal(s), 0);
+  return {
+    reg, tot,
+    rate: reg ? tot / reg : null,                 // (direct ∪ replay) / inscrits
+    regUp: up.reduce((n, s) => n + (s.registrants || 0), 0),
+    regAll: sessions.reduce((n, s) => n + (s.registrants || 0), 0),
+    att: past.reduce((n, s) => n + (s.attendees || 0), 0),
+    q: past.reduce((n, s) => n + (s.questions || 0), 0),
+    csat: csatAvg(past),
+    nPast: past.length, nUp: up.length,
+  };
+}
+
+const TEAMS = { afs: "AFS", sme: "SME Services" };
+
+// Vue « Synthèse » : les mêmes KPI qu'un webinar, mais CUMULÉS, d'un côté pour les
+// webinars dispensés par AFS, de l'autre par SME. Calculée dans le NAVIGATEUR à
+// partir des seules données chargées : sur la page publique elle ne porte donc que
+// sur les webinars publiés tant que l'accès privé n'est pas déverrouillé, et sur
+// tout ensuite — aucun agrégat des webinars protégés ne fuit en clair.
+// Hérite du filtre par date / trimestre, puisqu'elle reçoit les sessions filtrées.
+function renderSynthesis(webs, sessions) {
+  const byTeam = { afs: [], sme: [], "": [] };
+  for (const w of webs) byTeam[TEAMS[w.delivered_by] ? w.delivered_by : ""].push(w);
+
+  // AFS et SME toujours présentes (structure stable, même à zéro) ; « non attribué »
+  // seulement s'il en reste, pour qu'aucun webinar ne manque au cumul sans le dire.
+  const cols = [{ k: "afs", l: TEAMS.afs }, { k: "sme", l: TEAMS.sme }];
+  if (byTeam[""].length) cols.push({ k: "", l: "Non attribué" });
+  cols.push({ k: "__t", l: "Total" });
+
+  const idsOf = (k) => new Set((k === "__t" ? webs : byTeam[k]).map((w) => w.id));
+  const data = cols.map((c) => {
+    const ids = idsOf(c.k);
+    return { ...c, ws: (c.k === "__t" ? webs : byTeam[c.k]),
+             st: aggStats(sessions.filter((s) => ids.has(s.event_id))) };
+  });
+
+  const lignes = [
+    ["Webinars", (d) => intf(d.ws.length)],
+    ["Taux de présence moyen", (d) => pct(d.st.rate), true],
+    ["Inscrits (cumul passé)", (d) => intf(d.st.reg)],
+    ["Inscrits (sessions à venir)", (d) => intf(d.st.regUp)],
+    ["Inscrits (toutes sessions)", (d) => intf(d.st.regAll)],
+    ["Présents en direct (cumul passé)", (d) => intf(d.st.att)],
+    ["Audience totale (direct + replay)", (d) => intf(d.st.tot)],
+    ["Questions posées (cumul)", (d) => intf(d.st.q)],
+    ["Satisfaction (CSAT)",
+      (d) => (d.st.csat ? `${d.st.csat.score}/${d.st.csat.scale}` : "—")],
+    ["Réponses CSAT", (d) => intf(d.st.csat ? d.st.csat.responses : 0)],
+    ["Sessions passées", (d) => intf(d.st.nPast)],
+    ["Sessions à venir", (d) => intf(d.st.nUp)],
+  ];
+
+  const sec = document.createElement("section");
+  sec.className = "webinar synthese";
+  sec.dataset.wtabLabel = "Synthèse AFS / SME";
+  sec.dataset.wids = "";        // pas un webinar : ni case « publier », ni « dispensé par »
+  sec.innerHTML = `
+    <div class="wh">
+      <h2>Synthèse AFS / SME</h2>
+      <span class="tag tag-grp">${intf(webs.length)} webinars</span>
+    </div>
+    <p class="muted synth-intro">
+      Mêmes indicateurs qu'un rapport de webinar, cumulés par équipe dispensatrice.
+      Suit le filtre par date et par trimestre ci-dessus.
+      ${byTeam[""].length ? `<strong>${intf(byTeam[""].length)} webinar(s) non attribué(s)</strong> —
+        coche AFS ou SME dans leur onglet de la console pour les ranger.` : ""}
+    </p>
+    <div class="tablewrap"><table class="syntable">
+      <thead><tr><th>Indicateur</th>${
+        data.map((d) => `<th class="num${d.k === "__t" ? " syn-tot" : ""}">${esc(d.l)}</th>`).join("")
+      }</tr></thead>
+      <tbody>${lignes.map(([lbl, f, fort]) => `<tr${fort ? ' class="syn-key"' : ""}>` +
+        `<td>${esc(lbl)}</td>` +
+        data.map((d) => `<td class="num${d.k === "__t" ? " syn-tot" : ""}">${f(d)}</td>`).join("") +
+        `</tr>`).join("")}</tbody>
+    </table></div>
+    <h3>Détail par webinar</h3>
+    ${synthDetail(webs, sessions)}
+  `;
+  return sec;
+}
+
+// Une ligne par webinar : son équipe et ses propres chiffres, pour voir d'où vient
+// le cumul et repérer un webinar mal attribué.
+function synthDetail(webs, sessions) {
+  const rows = webs.map((w) => {
+    const st = aggStats(sessions.filter((s) => s.event_id === w.id));
+    return { w, st };
+  }).sort((a, b) => (b.st.reg - a.st.reg));
+  const body = rows.map(({ w, st }) => {
+    const t = TEAMS[w.delivered_by];
+    return `<tr>
+      <td>${esc(w.title || w.id)}</td>
+      <td>${t ? `<span class="syn-team syn-${esc(w.delivered_by)}">${esc(t)}</span>`
+              : `<span class="syn-team syn-none">non attribué</span>`}</td>
+      <td class="num">${intf(st.nPast)}</td>
+      <td class="num">${intf(st.reg)}</td>
+      <td class="num">${intf(st.tot)}</td>
+      <td class="num">${pct(st.rate)}</td>
+      <td class="num">${intf(st.q)}</td>
+      <td class="num">${st.csat ? `${st.csat.score}/${st.csat.scale}` : "—"}</td>
+    </tr>`;
+  }).join("");
+  return `<div class="tablewrap"><table class="eptable">
+    <thead><tr><th>Webinar</th><th>Dispensé par</th>
+      <th class="num">Sessions</th><th class="num">Inscrits</th>
+      <th class="num">Audience</th><th class="num">Taux</th>
+      <th class="num">Questions</th><th class="num">CSAT</th></tr></thead>
+    <tbody>${body}</tbody></table></div>`;
 }
 
 // Tableau récapitulatif d'un groupe : une ligne par webinar membre, avec SES

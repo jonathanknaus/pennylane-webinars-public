@@ -349,3 +349,34 @@ dialog.detail::backdrop { background: rgba(0, 61, 61, .42); backdrop-filter: blu
   .stat-grid { grid-template-columns: 1fr; }
   .fb-count { margin-left: 0; }
 }
+
+/* ── Vue « Synthèse » (cumul par équipe dispensatrice) ───────────────────────── */
+.synth-intro { margin: 0 0 18px; max-width: 70ch; }
+.syntable th:first-child, .syntable td:first-child { text-align: left; }
+/* Colonne « Total » détachée des deux équipes : c'est la somme, pas une 3e équipe. */
+.syntable .syn-tot {
+  background: var(--bg-light); font-weight: 700; color: var(--teal-dark);
+  border-left: 2px solid var(--line);
+}
+.syntable tbody tr { cursor: default; }
+/* Ligne de tête de lecture (le taux) : c'est l'indicateur qu'on vient chercher. */
+.syntable tr.syn-key td { font-weight: 700; color: var(--teal-dark); }
+.syntable tr.syn-key { background: #f6fbf8; }
+
+/* Étiquette d'équipe dans le détail par webinar. Deux catégories seulement, donc
+   deux teintes du système suffisent ; « non attribué » reste en gris neutre pour ne
+   pas se faire lire comme une troisième équipe. */
+.syn-team {
+  font-size: 11.5px; font-weight: 700; padding: 3px 9px; border-radius: 999px;
+  white-space: nowrap;
+}
+.syn-afs { background: var(--bg-light); color: var(--teal-dark); }
+.syn-sme { background: var(--blue-soft); color: #1c3d66; }
+.syn-none { background: var(--bg); color: var(--muted); font-weight: 600; }
+
+/* Sélecteur de trimestre : même habillage que les champs de date de la barre. */
+.fb-field select {
+  font: inherit; font-size: 13px; color: var(--ink); background: #fff;
+  border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px;
+}
+.fb-field select:focus { outline: 2px solid var(--green-light); outline-offset: 0; }
