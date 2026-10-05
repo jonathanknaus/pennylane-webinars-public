@@ -447,6 +447,14 @@ function renderWebinar(w, sessions, members) {
       ${kpi("Inscrits (sessions à venir)", intf(totRegUp))}
       ${kpi("Inscrits (toutes sessions)", intf(totRegAll))}
       ${kpi("Présents (cumul passé)", intf(totAtt))}
+      ${/* « Présents » ne compte QUE le direct, alors que le taux ci-dessus porte sur
+            l'audience direct ∪ replay : sans ce KPI, le taux n'est pas retrouvable à
+            partir des chiffres affichés (sur RFE : 10 952/16 134 = 67,9 % contre 75,8 %
+            affiché), et on conclut à une erreur de calcul. Affiché UNIQUEMENT quand le
+            replay a été compté et ajoute quelque chose — sinon il répéterait « Présents »
+            à l'identique, et le taux est alors déjà vérifiable. */""}
+      ${totTotal !== totAtt
+        ? kpi("Audience totale", intf(totTotal), "direct + replay, cumul passé") : ""}
       ${kpi("Questions posées (cumul)", intf(totQ))}
       ${csat ? kpi("Satisfaction (CSAT)", `${csat.score}/${csat.scale}`, `${intf(csat.responses)} rép.`) : ""}
       ${kpi("Sessions passées", intf(past.length))}
