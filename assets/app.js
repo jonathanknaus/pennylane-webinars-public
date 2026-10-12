@@ -176,8 +176,22 @@ function render() {
     syncReadonlyTabs();
     return;
   }
+  // Page ENTIÈREMENT verrouillée (plus rien en clair, cf. publish.protect_all) :
+  // le filtre par date n'a rien à filtrer tant que le blob n'est pas déchiffré.
+  // On le retire pour que le formulaire d'accès SOIT la page, et non un encart
+  // sous une barre d'outils vide. La console admin n'est jamais dans ce cas (ses
+  // données sont locales et en clair) et pilote déjà #controls elle-même.
+  const solo = !!locked && !webinars.length;
+  if (!isAdminPage()) {
+    const host = document.getElementById("controls");
+    if (host) host.hidden = solo;
+  }
   app.innerHTML = "";
-  for (const v of buildViews(webinars, data.groups || [])) {
+  const views = buildViews(webinars, data.groups || []);
+  // Vue d'ensemble EN TÊTE : c'est donc le premier onglet, et la page sur laquelle
+  // on atterrit — notamment juste après le déverrouillage.
+  if (views.length > 1) app.appendChild(renderOverview(views, sessions));
+  for (const v of views) {
     if (v.members) {
       // Groupe : sessions des membres mises en commun. Le webinar passé au rendu
       // est synthétique (id du groupe) — les membres servent au détail par épisode.
@@ -193,7 +207,7 @@ function render() {
   if (webinars.length > 1) app.appendChild(renderSynthesis(webinars, sessions));
   // Dernier onglet : le verrou, tant que les webinars protégés ne sont pas
   // déchiffrés. Il disparaît de lui-même après déverrouillage (plus de blob).
-  if (locked) app.appendChild(renderLock(locked));
+  if (locked) app.appendChild(renderLock(locked, solo));
   syncReadonlyTabs();
 }
 
@@ -215,8 +229,8 @@ function showLocalBanner() {
   el.innerHTML =
     `<div class="localbanner">⚠️ <strong>Aperçu local</strong> — tous les webinars ` +
     `suivis sont affichés <strong>en clair, sans verrou</strong>. Ce n'est pas la ` +
-    `page publique : elle ne montre que les webinars publiés, les autres étant ` +
-    `chiffrés derrière l'accès privé.</div>`;
+    `page publique : là-bas, seuls les webinars publiés <em>en clair</em> s'affichent ` +
+    `sans mot de passe, tous les autres sont chiffrés derrière l'accès privé.</div>`;
   host.parentNode.insertBefore(el, host);
 }
 
@@ -310,17 +324,15 @@ async function unlockProtected(user, password) {
   }
   // Fusion : les webinars déchiffrés rejoignent les publics, et le blob disparaît
   // → l'onglet « verrou » n'est plus rendu, les nouveaux onglets apparaissent.
-  const fresh = new Set((payload.webinars || []).map((w) => w.id));
   state.data.webinars = (state.data.webinars || []).concat(payload.webinars || []);
   state.data.sessions = (state.data.sessions || []).concat(payload.sessions || []);
   state.data.groups = mergeGroups(state.data.groups || [], payload.groups || []);
+  state.data.audience = { ...(state.data.audience || {}), ...(payload.audience || {}) };
   delete state.data.protected;
-  // On atterrit sur le premier onglet contenant un webinar fraîchement déverrouillé
-  // (calculé sur les VUES, pas sur les webinars : un groupe en réunit plusieurs).
-  const views = buildViews(state.data.webinars, state.data.groups);
-  const idx = views.findIndex((v) => v.members
-    ? v.members.some((m) => fresh.has(m.id)) : fresh.has(v.webinar.id));
-  roTab = idx >= 0 ? idx : 0;
+  // On atterrit sur le PREMIER onglet, càd la vue d'ensemble : après avoir saisi
+  // ses identifiants, on veut voir tous les webinars d'un coup d'œil, pas le
+  // rapport détaillé de l'un d'entre eux.
+  roTab = 0;
   render();
   return { ok: true };
 }
@@ -339,19 +351,29 @@ function mergeGroups(a, b) {
   return Array.from(byId.values());
 }
 
-// Section « verrou » : un onglet comme un autre, avec le formulaire d'accès.
-function renderLock(p) {
+// Section « verrou », avec le formulaire d'accès. Deux situations :
+//   - `solo` : plus RIEN n'est publié en clair (publish.protect_all) → c'est la
+//     seule section, donc la page d'accueil. Le texte le dit ainsi : il n'y a pas
+//     de données « supplémentaires », il n'y a que celles-ci.
+//   - sinon : un onglet comme les autres, à côté des webinars publics.
+function renderLock(p, solo) {
   const sec = document.createElement("section");
-  sec.className = "webinar wlocked";
+  sec.className = "webinar wlocked" + (solo ? " wlock-solo" : "");
   sec.dataset.wtabLabel = "🔒 Accès privé";
   const n = Number(p.count) || 0;
   sec.innerHTML = `
-    <div class="wh"><h2>Accès privé</h2></div>
-    <div class="lockbox">
+    <div class="wh"><h2>${solo ? "Accès réservé" : "Accès privé"}</h2></div>
+    <div class="lockbox${solo ? " lock-solo" : ""}">
       <p class="lock-intro">
-        ${n ? `<strong>${intf(n)}</strong> webinar(s) suppl&eacute;mentaire(s) sont` : "Des webinars suppl&eacute;mentaires sont"}
-        disponibles sur cette page, <strong>chiffr&eacute;s</strong>.
-        Saisis l'identifiant et le mot de passe fournis pour les consulter.
+        ${solo
+          ? `Ce tableau de bord est <strong>enti&egrave;rement chiffr&eacute;</strong>. ` +
+            `Les agr&eacute;gats ${n ? `des <strong>${intf(n)}</strong> webinars suivis ` : ""}` +
+            `ne sont lisibles qu'apr&egrave;s identification. Saisis l'identifiant et le ` +
+            `mot de passe fournis pour afficher la vue d'ensemble.`
+          : `${n ? `<strong>${intf(n)}</strong> webinar(s) suppl&eacute;mentaire(s) sont`
+                 : "Des webinars suppl&eacute;mentaires sont"} ` +
+            `disponibles sur cette page, <strong>chiffr&eacute;s</strong>. ` +
+            `Saisis l'identifiant et le mot de passe fournis pour les consulter.`}
       </p>
       <form class="lock-form" autocomplete="off">
         <label class="lock-field">Identifiant
@@ -417,12 +439,19 @@ async function main() {
   buildControls();
   render();
 
-  // Délégation : tout élément [data-sid] ouvre le détail de la session.
+  // Délégation : [data-sid] ouvre le détail d'une session, [data-goto] bascule
+  // sur l'onglet d'un webinar (entête de carte de la vue d'ensemble). La session
+  // passe en premier — une ligne cliquable vit à l'intérieur d'une carte, et
+  // c'est bien son détail qu'on veut en cliquant dessus.
   app.addEventListener("click", (e) => {
     const el = e.target.closest("[data-sid]");
-    if (!el) return;
-    const s = byId.get(el.getAttribute("data-sid"));
-    if (s) openDetail(s);
+    if (el) {
+      const s = byId.get(el.getAttribute("data-sid"));
+      if (s) openDetail(s);
+      return;
+    }
+    const go = e.target.closest("[data-goto]");
+    if (go) gotoWebinar(go.getAttribute("data-goto"));
   });
 
   // Onglets de la vue lecture (jamais sur la page admin : admin.js s'en charge).
@@ -514,6 +543,156 @@ function renderWebinar(w, sessions, members) {
     ${table(past.slice().reverse())}
   `;
   return sec;
+}
+
+// ---- vue d'ensemble (page d'atterrissage) --------------------------------
+// Première section rendue, donc PREMIER onglet : une carte par onglet de webinar
+// (ou de série), avec ses chiffres de tête et ses sessions récentes / à venir.
+// C'est la page sur laquelle on arrive, en particulier juste après avoir saisi
+// l'identifiant et le mot de passe.
+//
+// Rien n'y est recalculé autrement qu'ailleurs : les cumuls du haut passent par
+// aggStats (les formules d'un rapport de webinar) et les lignes reprennent les
+// champs de session tels quels. Hérite du filtre par date / trimestre, puisqu'elle
+// reçoit les sessions déjà filtrées.
+
+// Fenêtre de sessions affichée par carte. Volontairement courte, et c'est le
+// point de la page : les cartes doivent rester comparables d'un coup d'œil, alors
+// que RFE compte 49 sessions passées et d'autres webinars trois. Le nombre de
+// sessions masquées est affiché (jamais de troncature muette) et l'onglet du
+// webinar en donne la liste complète.
+const OV_PAST = 3, OV_UP = 4;
+
+const ovMore = (txt) => `<li class="ovmore">${esc(txt)}</li>`;
+
+function renderOverview(views, sessions) {
+  const st = aggStats(sessions);
+  const nW = views.reduce((n, v) => n + (v.members ? v.members.length : 1), 0);
+  const sec = document.createElement("section");
+  sec.className = "webinar overview";
+  sec.dataset.wtabLabel = "Vue d'ensemble";
+  sec.dataset.wids = "";      // pas un webinar : ni case « publier », ni « dispensé par »
+  sec.innerHTML = `
+    <div class="wh">
+      <h2>Vue d'ensemble</h2>
+      <span class="tag tag-grp">${intf(nW)} webinars</span>
+      <span class="tag">${intf(st.nPast)} sessions passées · ${intf(st.nUp)} à venir</span>
+    </div>
+    ${/* Cinq tuiles, pas huit : le compte des sessions est un repère de contexte
+          (il part dans l'entête ci-dessus), pas un indicateur qu'on surveille. Au
+          delà de cinq, la rangée se casse en deux et la hiérarchie se perd —
+          alors que tout le détail est à un clic, dans l'onglet du webinar. */""}
+    <div class="kpis">
+      ${kpi("Taux de présence moyen", pct(st.rate), "passé")}
+      ${kpi("Audience totale", intf(st.tot), "direct + replay, cumul passé")}
+      ${kpi("Inscrits (cumul passé)", intf(st.reg))}
+      ${st.csat ? kpi("Satisfaction (CSAT)", `${st.csat.score}/${st.csat.scale}`,
+                      `${intf(st.csat.responses)} rép.`) : ""}
+      ${kpi("Inscrits (sessions à venir)", intf(st.regUp))}
+    </div>
+    <p class="muted ov-intro">
+      Cumul de tous les webinars suivis, sur la période filtrée ci-dessus.
+      Clique une <strong>session</strong> pour son détail, ou l'<strong>entête d'une
+      carte</strong> pour ouvrir le rapport complet du webinar.
+    </p>
+    <div class="ovgrid">${views.map((v) => ovCard(v, sessions)).join("")}</div>`;
+  return sec;
+}
+
+function ovCard(view, sessions) {
+  const grp = !!view.members;
+  const meta = grp ? view.group : view.webinar;
+  const ids = (grp ? view.members.map((m) => m.id) : [view.webinar.id]).filter(Boolean);
+  const vus = new Set(ids);
+  const mine = sessions.filter((s) => vus.has(s.event_id));
+
+  const past = mine.filter((s) => s.status === "past")
+    .sort((a, b) => ts(a.estimated_started_at) - ts(b.estimated_started_at));
+  // « À venir » inclut une session EN DIRECT : c'est justement le moment où on
+  // ouvre cette page, elle ne doit pas en disparaître. Les sessions annulées
+  // restent exclues, comme dans tout le reste du dashboard.
+  const next = mine.filter((s) => s.status === "upcoming" || s.status === "live")
+    .sort((a, b) => ts(a.estimated_started_at) - ts(b.estimated_started_at));
+
+  const reg = past.reduce((n, s) => n + (s.registrants || 0), 0);
+  const tot = past.reduce((n, s) => n + attTotal(s), 0);
+  // Les COMPTEURS ne portent que sur les sessions à venir au sens strict, pour
+  // coïncider exactement avec les KPI du rapport du webinar. Une session en cours
+  // n'est pas « à venir » : elle apparaît dans la liste, signalée « en direct ».
+  const aVenir = next.filter((s) => s.status === "upcoming");
+  const enCours = next.length - aVenir.length;
+  const regUp = aVenir.reduce((n, s) => n + (s.registrants || 0), 0);
+
+  const cachees = Math.max(0, past.length - OV_PAST);
+  const restantes = Math.max(0, next.length - OV_UP);
+  const lignes =
+    (cachees ? ovMore(`+ ${intf(cachees)} session(s) passée(s) plus ancienne(s)`) : "") +
+    past.slice(-OV_PAST).map((s) => ovRow(s, false)).join("") +
+    next.slice(0, OV_UP).map((s, i) => ovRow(s, i === 0)).join("") +
+    (restantes ? ovMore(`+ ${intf(restantes)} session(s) à venir`) : "");
+
+  return `<article class="ovcard">
+    <header class="ovcard-head" data-goto="${esc(ids.join(","))}"
+            title="Ouvrir le rapport complet de ce webinar">
+      <h3 class="ovcard-t">${esc(meta.title || meta.id)}</h3>
+      <p class="ovcard-sub">
+        ${grp ? `<span class="tag tag-grp">${intf(view.members.length)} webinars</span> ` : ""}
+        ${intf(past.length)} passée(s) · ${intf(aVenir.length)} à venir${
+          enCours ? ` · <strong>en direct</strong>` : ""}
+      </p>
+      <div class="ovfigs">
+        <div class="ovfig">
+          <span class="ovfig-v">${pct(reg ? tot / reg : null)}</span>
+          <span class="ovfig-l">taux moyen</span>
+        </div>
+        <div class="ovfig">
+          <span class="ovfig-v">${intf(regUp)}</span>
+          <span class="ovfig-l">inscrits à venir</span>
+        </div>
+      </div>
+      <span class="ovcard-go" aria-hidden="true">→</span>
+    </header>
+    <ul class="ovlist">${lignes || ovMore("Aucune session sur la période")}</ul>
+  </article>`;
+}
+
+// Une ligne = une session, cliquable (même modale que partout ailleurs).
+// Session passée : audience / inscrits + taux. Session à venir : inscrits à ce
+// jour — le taux n'existe pas encore, et afficher « 0 % » le ferait croire nul.
+function ovRow(s, premier) {
+  const fini = s.status === "past";
+  const live = s.status === "live";
+  const badge = live ? `<span class="ovr-badge ovr-live">en direct</span>`
+    : (premier && !fini ? `<span class="ovr-badge">prochaine</span>` : "");
+  // Session corrigée à la main : signalée ici aussi, sinon le taux de cette ligne
+  // passerait pour une mesure (cf. session_overrides dans webinars.yaml).
+  const corr = s.manual
+    ? ` <span class="corr" title="${esc(s.manual_reason || "donnée corrigée manuellement")}">corrigé</span>`
+    : "";
+  const chiffres = fini
+    ? `<span class="ovr-v">${intf(attTotal(s))}<span class="ovr-u">/${intf(s.registrants)}</span></span>` +
+      `<span class="ovr-rate">${pct(s.attendance_rate)}</span>`
+    : `<span class="ovr-v">${intf(s.registrants)}<span class="ovr-u"> inscrits</span></span>`;
+  return `<li class="ovrow${fini ? "" : " ovrow-up"}${badge ? " ovrow-soon" : ""}"` +
+    ` data-sid="${esc(s.session_id)}" title="Voir le détail de la session">` +
+    `<span class="ovr-when">${esc(fmtDateTime(s.estimated_started_at))}${corr}</span>` +
+    `${badge}<span class="ovr-m">${chiffres}</span></li>`;
+}
+
+// Ouvre l'onglet du webinar (ou de la série) couvrant exactement `wids`. On
+// retrouve la section par son data-wids — l'identité canonique d'une section,
+// déjà utilisée par la console — puis on CLIQUE sur l'onglet correspondant : les
+// deux pages gèrent leurs onglets séparément (roTab ici, activeTab dans
+// admin.js), et passer par le bouton évite d'en dupliquer la logique.
+function gotoWebinar(wids) {
+  const secs = Array.from(document.querySelectorAll("#app .webinar"));
+  const i = secs.findIndex((s) => s.dataset.wids === wids);
+  if (i < 0) return;
+  const tab = document.querySelector(
+    `#wtabs .wtab[data-rotab="${i}"], #wtabs .wtab[data-tab="${i}"]`);
+  if (!tab) return;
+  tab.click();
+  window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 // ---- synthèse cumulée AFS / SME ------------------------------------------

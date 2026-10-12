@@ -169,6 +169,12 @@ body {
 .lock-err { color: #b23b3b; font-weight: 600; }
 .lock-note { margin: 16px 0 0; font-size: 12.5px; }
 
+/* Verrou seul sur la page (plus rien en clair) : le formulaire EST la page, donc
+   on le centre — titre compris — au lieu de le coller à gauche sous une barre
+   d'outils absente. */
+.lock-solo { margin: 10px auto 40px; }
+.wlock-solo .wh { justify-content: center; margin-top: 18px; }
+
 .webinar { margin-bottom: 52px; }
 .wh { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
 .wh h2 { margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -.4px; color: var(--teal-dark); }
@@ -349,6 +355,74 @@ dialog.detail::backdrop { background: rgba(0, 61, 61, .42); backdrop-filter: blu
   .stat-grid { grid-template-columns: 1fr; }
   .fb-count { margin-left: 0; }
 }
+
+/* ── Vue d'ensemble (page d'atterrissage) ────────────────────────────────────
+   Une carte par onglet de webinar : entête cliquable (→ rapport complet) puis
+   quelques lignes de sessions, chacune cliquable (→ détail de la session). */
+.ov-intro { margin: 0 0 18px; max-width: 80ch; }
+.ovgrid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;
+  align-items: start;        /* cartes de hauteurs libres, alignées en haut */
+}
+@media (max-width: 1000px) { .ovgrid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 680px)  { .ovgrid { grid-template-columns: 1fr; } }
+
+.ovcard {
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden;
+}
+.ovcard-head {
+  position: relative; cursor: pointer; padding: 14px 16px 12px;
+  background: var(--bg-light); border-bottom: 1px solid var(--line);
+  transition: background .12s;
+}
+.ovcard-head:hover { background: var(--green-light); }
+.ovcard-t {
+  margin: 0 20px 3px 0; font-size: 14.5px; font-weight: 800; line-height: 1.3;
+  color: var(--teal-dark);
+}
+.ovcard-sub { margin: 0 0 11px; font-size: 11.5px; color: var(--muted); }
+.ovcard-sub .tag { font-size: 10px; padding: 2px 7px; }
+.ovfigs { display: flex; gap: 20px; }
+.ovfig { display: flex; flex-direction: column; }
+.ovfig-v {
+  font-size: 19px; font-weight: 800; line-height: 1.15; letter-spacing: -.3px;
+  color: var(--teal-dark); font-variant-numeric: tabular-nums;
+}
+.ovfig-l { font-size: 10.5px; color: var(--muted); font-weight: 500; }
+.ovcard-go {
+  position: absolute; top: 12px; right: 14px; font-weight: 800;
+  color: var(--green-dark); opacity: 0; transition: opacity .12s;
+}
+.ovcard-head:hover .ovcard-go { opacity: 1; }
+
+.ovlist { list-style: none; margin: 0; padding: 0; }
+.ovrow, .ovmore { border-bottom: 1px solid var(--line); }
+.ovrow:last-child, .ovmore:last-child { border-bottom: none; }
+.ovrow {
+  display: flex; align-items: baseline; gap: 7px; padding: 8px 16px;
+  font-size: 12.5px; cursor: pointer; transition: background .12s;
+}
+.ovrow:hover { background: var(--bg-light); }
+.ovr-when { font-weight: 600; white-space: nowrap; }
+.ovrow-up .ovr-when { color: var(--teal); }
+/* Prochaine session (ou session en cours) : repère visuel, c'est la ligne qu'on
+   cherche en ouvrant la page. */
+.ovrow-soon { background: #f6fbf8; box-shadow: inset 3px 0 0 var(--green-dark); }
+.ovr-badge {
+  font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .4px;
+  background: var(--blue-soft); color: #1c3d66; padding: 2px 6px; border-radius: 999px;
+  white-space: nowrap;
+}
+.ovr-live { background: var(--green); color: var(--teal-dark); }
+.ovr-m {
+  display: flex; align-items: baseline; gap: 8px; margin-left: auto;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.ovr-v { font-weight: 700; }
+.ovr-u { font-weight: 500; color: var(--muted); }
+.ovr-rate { font-weight: 800; color: var(--teal-dark); }
+.ovmore { padding: 7px 16px; font-size: 11.5px; color: var(--muted); background: #fafcfb; }
 
 /* ── Vue « Synthèse » (cumul par équipe dispensatrice) ───────────────────────── */
 .synth-intro { margin: 0 0 18px; max-width: 70ch; }
