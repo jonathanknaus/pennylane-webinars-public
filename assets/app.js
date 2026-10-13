@@ -114,12 +114,8 @@ function buildControls() {
   // Le trimestre n'est qu'un raccourci : il POSE les deux bornes de date, et tout
   // le reste (filtrage, KPI, synthèse) continue de ne connaître que ces bornes —
   // une seule source de vérité, donc pas de divergence possible entre les deux.
-  for (const q of quartersOf(state.data)) {
-    const o = document.createElement("option");
-    o.value = `${q.from}|${q.to}`;
-    o.textContent = q.label;
-    quarter.appendChild(o);
-  }
+  // Ses options sont remplies par syncQuarters() À CHAQUE RENDU, pas ici : sur la
+  // page publique, les sessions n'existent qu'APRÈS le déverrouillage.
   const apply = () => { state.from = from.value || null; state.to = to.value || null; render(); };
   from.addEventListener("change", () => { quarter.value = ""; apply(); });
   to.addEventListener("change", () => { quarter.value = ""; apply(); });
@@ -133,6 +129,34 @@ function buildControls() {
   host.querySelector("#f-reset").addEventListener("click", () => {
     from.value = ""; to.value = ""; quarter.value = ""; state.from = state.to = null; render();
   });
+}
+
+// (Re)remplit le sélecteur de trimestre d'après les données CHARGÉES, à chaque
+// rendu. Il était peuplé une seule fois, à la construction de la barre de filtre
+// — or sur la page publique, à cet instant, state.data.sessions est VIDE : tout
+// est encore chiffré. Le sélecteur ne proposait donc que « — tous — » et le filtre
+// par trimestre restait sans effet, même après déverrouillage (constaté le
+// 2026-10-13 ; avant le verrou global, il ne listait que les trimestres de RFE et
+// ignorait ceux où seuls des webinars protégés avaient tourné).
+//
+// Idempotent, et volontairement guardé par une SIGNATURE : rejoué à chaque
+// changement de filtre, il ne doit pas reconstruire les options sous le doigt de
+// l'utilisateur — réécrire le <select> remettrait sa valeur à zéro et annulerait
+// la sélection qu'on vient de faire.
+function syncQuarters() {
+  const sel = document.getElementById("f-quarter");
+  if (!sel) return;
+  const qs = quartersOf(state.data);
+  const sig = qs.map((q) => q.label).join("|");
+  if (sel.dataset.sig === sig) return;
+  sel.dataset.sig = sig;
+  const choisi = sel.value;
+  sel.innerHTML = `<option value="">— tous —</option>` +
+    qs.map((q) => `<option value="${q.from}|${q.to}">${esc(q.label)}</option>`).join("");
+  // Conserve le trimestre sélectionné s'il existe toujours. Sinon le select
+  // retombe sur « — tous — » tandis que les bornes de date restent affichées :
+  // c'est exactement l'état d'un filtrage saisi à la main, donc cohérent.
+  sel.value = choisi;
 }
 
 // Trimestres réellement présents dans les données, du plus récent au plus ancien.
@@ -169,6 +193,7 @@ function render() {
   if (cnt) cnt.textContent = (state.from || state.to)
     ? `${sessions.length} / ${all.length} session(s)`
     : `${all.length} session(s)`;
+  syncQuarters();
 
   const locked = lockedInfo();
   if (!webinars.length && !locked) {
