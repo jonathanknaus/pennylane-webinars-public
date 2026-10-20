@@ -96,14 +96,19 @@ function csatCoverage(sessions) {
 // Même taux, cumulé sur plusieurs périmètres : chaque vue (webinar ou série) garde sa
 // PROPRE fenêtre — les épisodes d'une série partagent un sondage, pas ceux de deux
 // webinars distincts — puis réponses et audiences s'additionnent.
+// Une vue dont la case « Afficher le taux de réponse CSAT » est décochée reste HORS du
+// cumul : la masquer dans son seul rapport tout en la comptant dans la Vue d'ensemble et
+// la Synthèse laissait son taux visible (et publié) à deux autres endroits. `n` / `of` =
+// vues retenues / vues totales, pour que l'affichage dise sur quoi porte le cumul.
 function csatCoverageViews(views, sessions) {
-  let resp = 0, base = 0;
+  let resp = 0, base = 0, n = 0;
   for (const v of views) {
+    if (!csatRateShown(v.webinar, v.members)) continue;
     const ids = new Set(v.members ? v.members.map((m) => m.id) : [v.webinar.id]);
     const c = csatCoverage(sessions.filter((s) => ids.has(s.event_id)));
-    if (c) { resp += c.resp; base += c.base; }
+    if (c) { resp += c.resp; base += c.base; n++; }
   }
-  return base ? { resp, base, rate: resp / base } : null;
+  return base ? { resp, base, rate: resp / base, n, of: views.length } : null;
 }
 
 // Tuile « Taux de réponse CSAT » (rien si le sondage n'a reçu aucune réponse : un 0 %
@@ -115,16 +120,23 @@ const CSAT_RATE_TIP = "Réponses CSAT ÷ audience totale (direct + replay), de l
 // par webinar (champ `show_csat_rate`, absent = affichée). Pour une série, elle n'est
 // masquée que si CHAQUE membre l'est : la case de la console les bascule ensemble, et
 // un état hétérogène ne doit pas faire disparaître une donnée par accident.
-// Ne concerne QUE ce rapport : la Vue d'ensemble et la Synthèse cumulent toujours tous
-// les webinars, pour rester cohérentes avec les « réponses CSAT » affichées à côté.
+// Vaut aussi pour les cumuls (Vue d'ensemble, Synthèse) : un webinar décoché n'y entre
+// pas, cf. csatCoverageViews. Le taux cumulé porte alors sur les seuls webinars cochés.
 function csatRateShown(w, members) {
   const ws = members && members.length ? members : [w];
   return !ws.every((x) => x && x.show_csat_rate === false);
 }
 
+// Cumul partiel (`of` > `n`) : la tuile le dit en toutes lettres, sinon « 28,7 % » sous
+// l'étiquette « AFS » ou « tous webinars » se lirait comme le taux de TOUS les webinars.
 function csatRateKpi(cov) {
-  return cov ? kpi("Taux de réponse CSAT", pct(cov.rate),
-    `${intf(cov.resp)} rép. sur ${intf(cov.base)} participants`, CSAT_RATE_TIP) : "";
+  if (!cov) return "";
+  const partiel = cov.of > cov.n;
+  return kpi("Taux de réponse CSAT", pct(cov.rate),
+    `${intf(cov.resp)} rép. sur ${intf(cov.base)} participants` +
+      (partiel ? ` · ${intf(cov.n)} webinar(s) sur ${intf(cov.of)}` : ""),
+    CSAT_RATE_TIP + (partiel ? " Cumul limité aux webinars dont la case « Afficher le " +
+      "taux de réponse CSAT » est cochée." : ""));
 }
 
 // Index session_id -> session, pour la modale de détail.
@@ -852,10 +864,20 @@ function renderSynthesis(webs, sessions) {
     ["Satisfaction (CSAT)",
       (d) => (d.st.csat ? `${d.st.csat.score}/${d.st.csat.scale}` : "—")],
     ["Réponses CSAT", (d) => intf(d.st.csat ? d.st.csat.responses : 0)],
-    ["Taux de réponse CSAT", (d) => (d.cov ? pct(d.cov.rate) : "—")],
+    // Cumul partiel (cases décochées) : « (1/3) » = 1 webinar retenu sur 3 de la colonne.
+    // Sans lui, le pourcentage se lirait comme celui de toute l'équipe.
+    ["Taux de réponse CSAT", (d) => (d.cov
+      ? pct(d.cov.rate) + (d.cov.of > d.cov.n
+        ? ` <span class="muted syn-part" title="Webinars retenus sur le total de la colonne">` +
+          `(${intf(d.cov.n)}/${intf(d.cov.of)})</span>` : "")
+      : "—")],
     ["Sessions passées", (d) => intf(d.st.nPast)],
     ["Sessions à venir", (d) => intf(d.st.nUp)],
   ];
+
+  // Vues (webinar ou série) dont la case est décochée : le taux de réponse les ignore.
+  const nExclus = buildViews(webs, (state.data && state.data.groups) || [])
+    .filter((v) => !csatRateShown(v.webinar, v.members)).length;
 
   const sec = document.createElement("section");
   sec.className = "webinar synthese";
@@ -881,6 +903,9 @@ function renderSynthesis(webs, sessions) {
         data.map((d) => `<td class="num${d.k === "__t" ? " syn-tot" : ""}">${f(d)}</td>`).join("") +
         `</tr>`).join("")}</tbody>
     </table></div>
+    ${nExclus ? `<p class="muted synth-note">Taux de réponse CSAT : ${intf(nExclus)} webinar(s)
+      dont la case « Afficher le taux de réponse CSAT » est décochée n'y entrent pas.
+      <em>(n/m)</em> indique combien sont retenus dans la colonne.</p>` : ""}
     <h3>Détail par webinar</h3>
     ${synthDetail(webs, sessions)}
   `;
