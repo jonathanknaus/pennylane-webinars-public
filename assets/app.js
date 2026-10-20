@@ -62,6 +62,71 @@ function csatAvg(sessions) {
   return den ? { score: Math.round((num / den) * 100) / 100, scale, responses: den } : null;
 }
 
+// Taux de RÉPONSE au sondage CSAT d'un périmètre d'enquête (un webinar, ou une série
+// qui partage un sondage) : réponses reçues ÷ audience totale (direct + replay).
+//
+// Trois choix, tous contraints par les données :
+//  - Cumulé, JAMAIS par session. Les avis sont rattachés à la dernière session
+//    diffusée avant leur horodatage : un avis tardif (replay) tombe sur une autre
+//    session que celle de son auteur, et certaines sessions affichent ainsi plus de
+//    100 % de réponses sur leurs présents (mesuré : jusqu'à 154 %). Sur un cumul,
+//    ces déplacements se compensent.
+//  - Dénominateur = audience totale, parce que le numérateur mélange les réponses du
+//    direct et du replay : diviser par le seul direct gonflerait le taux.
+//  - Fenêtre = de la PREMIÈRE à la DERNIÈRE session ayant reçu au moins un avis. Les
+//    sessions d'avant la mise en place du sondage, ou d'après son arrêt (RFE depuis le
+//    30/09), n'ont aucune réponse par construction : les compter diluerait le taux
+//    sans rien dire de l'engagement du public. Les sessions à zéro réponse AU MILIEU
+//    de la fenêtre comptent, elles, bien au dénominateur.
+// Renvoie null si le sondage n'a reçu aucune réponse sur les sessions fournies.
+function csatCoverage(sessions) {
+  const past = sessions.filter((s) => s.status === "past")
+    .sort((a, b) => ts(a.estimated_started_at) - ts(b.estimated_started_at));
+  const rep = (s) => (s.csat && typeof s.csat === "object" && s.csat.responses) || 0;
+  const first = past.findIndex((s) => rep(s) > 0);
+  if (first < 0) return null;
+  let last = past.length - 1;
+  while (last > first && !rep(past[last])) last--;
+  const win = past.slice(first, last + 1);
+  const resp = win.reduce((n, s) => n + rep(s), 0);
+  const base = win.reduce((n, s) => n + attTotal(s), 0);
+  return base ? { resp, base, rate: resp / base } : null;
+}
+
+// Même taux, cumulé sur plusieurs périmètres : chaque vue (webinar ou série) garde sa
+// PROPRE fenêtre — les épisodes d'une série partagent un sondage, pas ceux de deux
+// webinars distincts — puis réponses et audiences s'additionnent.
+function csatCoverageViews(views, sessions) {
+  let resp = 0, base = 0;
+  for (const v of views) {
+    const ids = new Set(v.members ? v.members.map((m) => m.id) : [v.webinar.id]);
+    const c = csatCoverage(sessions.filter((s) => ids.has(s.event_id)));
+    if (c) { resp += c.resp; base += c.base; }
+  }
+  return base ? { resp, base, rate: resp / base } : null;
+}
+
+// Tuile « Taux de réponse CSAT » (rien si le sondage n'a reçu aucune réponse : un 0 %
+// affiché pour un webinar sans sondage ferait croire à un public muet).
+const CSAT_RATE_TIP = "Réponses CSAT ÷ audience totale (direct + replay), de la première " +
+  "à la dernière session ayant reçu un avis. Un sondage pas encore en place, ou arrêté, " +
+  "ne dilue donc pas le taux.";
+// La tuile d'un RAPPORT (webinar ou série) peut être masquée depuis la console, webinar
+// par webinar (champ `show_csat_rate`, absent = affichée). Pour une série, elle n'est
+// masquée que si CHAQUE membre l'est : la case de la console les bascule ensemble, et
+// un état hétérogène ne doit pas faire disparaître une donnée par accident.
+// Ne concerne QUE ce rapport : la Vue d'ensemble et la Synthèse cumulent toujours tous
+// les webinars, pour rester cohérentes avec les « réponses CSAT » affichées à côté.
+function csatRateShown(w, members) {
+  const ws = members && members.length ? members : [w];
+  return !ws.every((x) => x && x.show_csat_rate === false);
+}
+
+function csatRateKpi(cov) {
+  return cov ? kpi("Taux de réponse CSAT", pct(cov.rate),
+    `${intf(cov.resp)} rép. sur ${intf(cov.base)} participants`, CSAT_RATE_TIP) : "";
+}
+
 // Index session_id -> session, pour la modale de détail.
 const byId = new Map();
 
@@ -553,6 +618,7 @@ function renderWebinar(w, sessions, members) {
         ? kpi("Audience totale", intf(totTotal), "direct + replay, cumul passé") : ""}
       ${kpi("Questions posées (cumul)", intf(totQ))}
       ${csat ? kpi("Satisfaction (CSAT)", `${csat.score}/${csat.scale}`, `${intf(csat.responses)} rép.`) : ""}
+      ${csatRateShown(w, members) ? csatRateKpi(csatCoverage(sessions)) : ""}
       ${kpi("Sessions passées", intf(past.length))}
       ${kpi("Sessions à venir", intf(upcoming.length))}
     </div>
@@ -601,7 +667,7 @@ function renderOverview(views, sessions) {
     <div class="wh">
       <h2>Vue d'ensemble</h2>
       <span class="tag tag-grp">${intf(nW)} webinars</span>
-      <span class="tag">${intf(st.nPast)} sessions passées · ${intf(st.nUp)} à venir</span>
+      <span class="tag">${intf(st.nPast)} sessions passées · ${intf(st.nUp)} à venir (${intf(st.regUp)} inscrits)</span>
     </div>
     ${/* Cinq tuiles, pas huit : le compte des sessions est un repère de contexte
           (il part dans l'entête ci-dessus), pas un indicateur qu'on surveille. Au
@@ -613,7 +679,7 @@ function renderOverview(views, sessions) {
       ${kpi("Inscrits (cumul passé)", intf(st.reg))}
       ${st.csat ? kpi("Satisfaction (CSAT)", `${st.csat.score}/${st.csat.scale}`,
                       `${intf(st.csat.responses)} rép.`) : ""}
-      ${kpi("Inscrits (sessions à venir)", intf(st.regUp))}
+      ${csatRateKpi(csatCoverageViews(views, sessions))}
     </div>
     <p class="muted ov-intro">
       Cumul de tous les webinars suivis, sur la période filtrée ci-dessus.
@@ -766,8 +832,12 @@ function renderSynthesis(webs, sessions) {
   const data = cols.map((c) => {
     const ws = c.k === "__t" ? webs : byTeam[c.k];
     const ids = new Set(ws.map((w) => w.id));
+    const mine = sessions.filter((s) => ids.has(s.event_id));
     return { ...c, ws, actifs: ws.filter((w) => avecSession.has(w.id)),
-             st: aggStats(sessions.filter((s) => ids.has(s.event_id))) };
+             st: aggStats(mine),
+             // Chaque série garde sa fenêtre de sondage : buildViews regroupe les
+             // épisodes qui partagent un sondage (cf. csatCoverageViews).
+             cov: csatCoverageViews(buildViews(ws, (state.data && state.data.groups) || []), mine) };
   });
 
   const lignes = [
@@ -782,6 +852,7 @@ function renderSynthesis(webs, sessions) {
     ["Satisfaction (CSAT)",
       (d) => (d.st.csat ? `${d.st.csat.score}/${d.st.csat.scale}` : "—")],
     ["Réponses CSAT", (d) => intf(d.st.csat ? d.st.csat.responses : 0)],
+    ["Taux de réponse CSAT", (d) => (d.cov ? pct(d.cov.rate) : "—")],
     ["Sessions passées", (d) => intf(d.st.nPast)],
     ["Sessions à venir", (d) => intf(d.st.nUp)],
   ];
@@ -908,8 +979,8 @@ function audienceKpis(scopeId) {
   return out;
 }
 
-function kpi(label, value, note) {
-  return `<div class="kpi"><div class="kpi-v">${value}</div>` +
+function kpi(label, value, note, tip) {
+  return `<div class="kpi"${tip ? ` title="${esc(tip)}"` : ""}><div class="kpi-v">${value}</div>` +
     `<div class="kpi-l">${esc(label)}${note ? ` <em>(${esc(note)})</em>` : ""}</div></div>`;
 }
 
