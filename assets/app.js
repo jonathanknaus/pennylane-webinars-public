@@ -143,7 +143,11 @@ function csatRateKpi(cov) {
 const byId = new Map();
 
 // État global : données chargées + bornes du filtre par date (null = illimité).
-const state = { data: null, from: null, to: null };
+const state = { data: null, from: null, to: null,
+                // Niveau 2 : bloc confidentiel (chiffré) trouvé DANS le bloc du niveau 1, et
+                // liste déchiffrée. Jamais persistée (ni localStorage, ni URL) : elle ne vit
+                // que dans la mémoire de l'onglet et disparaît au rechargement.
+                confidential: null, firms: null };
 
 // ---- onglets par webinar (vue lecture seule) -----------------------------
 // La console admin (admin.js) gère ses PROPRES onglets sur #wtabs (couplés au
@@ -309,6 +313,7 @@ function render() {
   if (webinars.length > 1) app.appendChild(renderSynthesis(webinars, sessions));
   // Dernier onglet : le verrou, tant que les webinars protégés ne sont pas
   // déchiffrés. Il disparaît de lui-même après déverrouillage (plus de blob).
+  if (state.confidential) app.appendChild(renderConfidential());
   if (locked) app.appendChild(renderLock(locked, solo));
   syncReadonlyTabs();
 }
@@ -405,6 +410,20 @@ const b64bytes = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 // Déchiffre le blob et fusionne son contenu dans l'état, puis re-rend. L'échec
 // est indiscernable d'un mauvais secret par construction (GCM authentifié) :
 // on ne distingue donc pas « mot de passe faux » de « données abîmées ».
+// Déchiffre un blob au format de publish_site._encrypt_payload (PBKDF2 → AES-256-GCM) et
+// renvoie l'objet JSON. LÈVE si le secret est faux (GCM est authentifié : un mauvais
+// secret échoue proprement, jamais de données douteuses). Commun aux DEUX niveaux d'accès.
+async function decryptBlob(p, user, password) {
+  const km = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(user + "\n" + password), "PBKDF2", false, ["deriveKey"]);
+  const key = await crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt: b64bytes(p.salt), iterations: p.iter, hash: p.hash || "SHA-256" },
+    km, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
+  const clear = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: b64bytes(p.iv) }, key, b64bytes(p.ct));
+  return JSON.parse(new TextDecoder().decode(clear));
+}
+
 async function unlockProtected(user, password) {
   const p = lockedInfo();
   if (!p) return { ok: false, error: "Aucune donnée protégée à déverrouiller." };
@@ -413,14 +432,7 @@ async function unlockProtected(user, password) {
   }
   let payload;
   try {
-    const km = await crypto.subtle.importKey(
-      "raw", new TextEncoder().encode(user + "\n" + password), "PBKDF2", false, ["deriveKey"]);
-    const key = await crypto.subtle.deriveKey(
-      { name: "PBKDF2", salt: b64bytes(p.salt), iterations: p.iter, hash: p.hash || "SHA-256" },
-      km, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
-    const clear = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv: b64bytes(p.iv) }, key, b64bytes(p.ct));
-    payload = JSON.parse(new TextDecoder().decode(clear));
+    payload = await decryptBlob(p, user, password);
   } catch (e) {
     return { ok: false, error: "Identifiant ou mot de passe incorrect." };
   }
@@ -431,6 +443,11 @@ async function unlockProtected(user, password) {
   state.data.groups = mergeGroups(state.data.groups || [], payload.groups || []);
   state.data.audience = { ...(state.data.audience || {}), ...(payload.audience || {}) };
   delete state.data.protected;
+  // Page confidentielle éventuelle : on garde le bloc chiffré SANS l'ouvrir. Il n'est
+  // pas fusionné dans state.data — la liste ne doit jamais atterrir dans les données
+  // du tableau de bord, que d'autres fonctions parcourent et exportent.
+  state.confidential = (payload.confidential && payload.confidential.ct) ? payload.confidential : null;
+  state.firms = null;
   // On atterrit sur le PREMIER onglet, càd la vue d'ensemble : après avoir saisi
   // ses identifiants, on veut voir tous les webinars d'un coup d'œil, pas le
   // rapport détaillé de l'un d'entre eux.
@@ -511,6 +528,218 @@ function renderLock(p, solo) {
   return sec;
 }
 
+// ---- page confidentielle (niveau 2) --------------------------------------
+// Liste NOMINATIVE des cabinets clients ayant participé aux webinars Guidance. Bien plus
+// sensible que les agrégats du tableau de bord, d'où un SECOND niveau d'accès : le bloc est
+// chiffré avec d'autres identifiants et niché dans le bloc du niveau 1 (cf. publish_site.py).
+// Déchiffré dans le navigateur, gardé en mémoire de l'onglet SEULEMENT (state.firms) : ni
+// localStorage, ni URL, ni cookie. Il ne rejoint jamais state.data.
+
+async function unlockConfidential(user, password) {
+  const p = state.confidential;
+  if (!p) return { ok: false, error: "Aucune page confidentielle à déverrouiller." };
+  if (!cryptoReady()) {
+    return { ok: false, error: "Déchiffrement indisponible ici : ouvre la page en https:// (ou depuis localhost)." };
+  }
+  let doc;
+  try {
+    doc = await decryptBlob(p, user, password);
+  } catch (e) {
+    return { ok: false, error: "Identifiant ou mot de passe incorrect." };
+  }
+  if (!doc || !Array.isArray(doc.firms)) return { ok: false, error: "Contenu inattendu." };
+  state.firms = doc;
+  render();                       // roTab inchangé : on reste sur l'onglet confidentiel
+  return { ok: true };
+}
+
+// Reverrouille : la liste quitte la mémoire. Le bloc chiffré reste, il faut ressaisir le secret.
+function lockFirms() {
+  state.firms = null;
+  render();
+}
+
+// Formulaire de second niveau. Champs nommés user2/password2 et autocomplete désactivé :
+// les deux formulaires d'une même page partagent l'origine, et un gestionnaire de mots de
+// passe y proposerait sinon les identifiants du NIVEAU 1, qui n'ouvrent pas celui-ci.
+function confLockForm(onSubmit, intro) {
+  const box = document.createElement("div");
+  box.className = "lockbox";
+  box.innerHTML = `
+    <p class="lock-intro">${intro}</p>
+    <form class="lock-form" autocomplete="off">
+      <label class="lock-field">Identifiant (niveau 2)
+        <input type="text" name="user2" autocomplete="off" required>
+      </label>
+      <label class="lock-field">Mot de passe (niveau 2)
+        <input type="password" name="password2" autocomplete="new-password" required>
+      </label>
+      <button type="submit" class="lock-btn">Déverrouiller</button>
+    </form>
+    <p class="lock-msg" role="alert" aria-live="polite"></p>`;
+  const form = box.querySelector(".lock-form");
+  const msg = box.querySelector(".lock-msg");
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const btn = form.querySelector(".lock-btn");
+    msg.className = "lock-msg";
+    msg.textContent = "Déverrouillage…";
+    btn.disabled = true;
+    const res = await onSubmit(form.user2.value.trim(), form.password2.value);
+    if (!res.ok) {                   // succès : render() a déjà tout remplacé
+      btn.disabled = false;
+      msg.className = "lock-msg lock-err";
+      msg.textContent = res.error;
+      form.password2.select();
+    }
+  });
+  return box;
+}
+
+function renderConfidential() {
+  const sec = document.createElement("section");
+  sec.className = "webinar wconf" + (state.firms ? "" : " wlocked");
+  sec.dataset.wtabLabel = "🔒 Cabinets (confidentiel)";
+  sec.dataset.wids = "";           // pas un webinar : ni case « publier », ni « dispensé par »
+  if (state.firms) {
+    sec.appendChild(renderFirmsView(state.firms, lockFirms));
+    return sec;
+  }
+  sec.innerHTML = `<div class="wh"><h2>Cabinets — accès confidentiel</h2>
+    <span class="tag tag-conf">2<sup>e</sup> niveau</span></div>`;
+  sec.appendChild(confLockForm(unlockConfidential,
+    `Liste nominative des <strong>cabinets clients</strong> ayant participé aux webinars
+     Guidance. Elle est protégée par un <strong>second niveau</strong> d'identification,
+     distinct de celui du tableau de bord : les identifiants saisis pour y entrer ne
+     l'ouvrent pas.`));
+  const note = document.createElement("p");
+  note.className = "muted lock-note";
+  note.textContent = "Déchiffrement dans ton navigateur : rien n'est envoyé à un serveur. " +
+    "Le contenu reste en mémoire de cet onglet et disparaît au rechargement.";
+  sec.appendChild(note);
+  return sec;
+}
+
+// Tableau de la liste des cabinets : recherche, tri, filtre « participants », export CSV.
+// Fonction autonome (reçoit la liste déjà déchiffrée) : réutilisée telle quelle par la
+// console locale. `onLock`, si fourni, ajoute un bouton « Verrouiller ».
+function renderFirmsView(doc, onLock) {
+  const root = document.createElement("div");
+  const norm = (s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const rows = (doc.firms || []).map((r) => ({
+    n: r.n, i: r.i || 0, p: r.p || 0, d: r.d || 0, e: r.e || 0, k: norm(r.n) }));
+  const ui = { q: "", only: true, key: "n", dir: 1 };
+  const pe = doc.people || {}, ss = doc.sessions || {};
+  const COLS = [["n", "Cabinet"], ["p", "Participants"], ["d", "En direct"], ["e", "Épisodes"], ["i", "Inscrits"]];
+
+  const notes = [
+    `<strong>Participant</strong> = présent en direct <em>ou</em> spectateur du replay à au moins une
+     session passée (${intf(ss.counted)} session(s) comptée(s) sur ${intf(ss.total)}). « Épisodes » =
+     nombre d'épisodes distincts où ce cabinet a eu au moins un participant.`,
+    ...(ss.excluded || []).map((x) => `Session du ${esc(fmtDate(x.date))} : ${esc(x.why)} — ses
+     inscrits comptent comme inscrits, pas comme participants.`),
+    `Les noms sont saisis en texte libre et regroupés après normalisation (casse, accents,
+     « Cabinet », formes juridiques) : c'est une <strong>estimation</strong>. Deux cabinets homonymes
+     fusionnent ; une faute de frappe en sépare un en deux.`,
+    pe.unfilled_participated
+      ? `${intf(pe.unfilled_participated)} participant(s) n'ont renseigné aucun cabinet${pe.rejected_values
+          ? ` (${intf(pe.rejected_values)} saisie(s) écartée(s) : e-mail ou téléphone)` : ""} et ne
+         figurent donc pas dans cette liste.` : "",
+    "Cette liste ne suit pas le filtre par date.",
+  ].filter(Boolean);
+
+  root.innerHTML = `
+    <div class="wh"><h2>Cabinets — ${esc(doc.title || "série")}</h2>
+      <span class="tag tag-conf">Confidentiel</span></div>
+    <p class="muted firms-meta">Liste calculée le ${esc(fmtDateTime(doc.computed_at))} ·
+      <strong>${intf(doc.firms_participating)}</strong> cabinets avec au moins un participant, sur
+      ${intf(doc.firms_total)} cabinets inscrits.</p>
+    <ul class="firms-notes muted">${notes.map((n) => `<li>${n}</li>`).join("")}</ul>
+    <div class="firms-bar">
+      <input type="search" class="firms-q" placeholder="Rechercher un cabinet…" aria-label="Rechercher un cabinet">
+      <label class="firms-only"><input type="checkbox" checked> Participants uniquement</label>
+      <button type="button" class="fb-reset" data-act="csv">Télécharger CSV</button>
+      <button type="button" class="fb-reset" data-act="copy">Copier les noms</button>
+      ${onLock ? `<button type="button" class="fb-reset" data-act="lock">🔒 Verrouiller</button>` : ""}
+      <span class="firms-count" role="status"></span>
+    </div>
+    <div class="tablewrap"><table class="firmtable">
+      <thead><tr>${COLS.map(([k, l]) =>
+        `<th class="sortable${k === "n" ? "" : " num"}" data-k="${k}" tabindex="0">${l}</th>`).join("")}</tr></thead>
+      <tbody></tbody></table></div>`;
+
+  const tbody = root.querySelector("tbody");
+  const count = root.querySelector(".firms-count");
+  const view = () => rows
+    .filter((r) => (!ui.only || r.p > 0) && (!ui.q || r.k.includes(ui.q)))
+    .sort((a, b) => ui.key === "n"
+      ? ui.dir * a.k.localeCompare(b.k, "fr")
+      : ui.dir * ((a[ui.key] - b[ui.key]) || a.k.localeCompare(b.k, "fr")));
+
+  function paint() {
+    const v = view();
+    tbody.innerHTML = v.map((r) => `<tr><td>${esc(r.n)}</td><td class="num">${intf(r.p)}</td>
+      <td class="num">${intf(r.d)}</td><td class="num">${intf(r.e)}</td><td class="num">${intf(r.i)}</td></tr>`).join("")
+      || `<tr><td colspan="5" class="muted">Aucun cabinet ne correspond.</td></tr>`;
+    count.textContent = `${intf(v.length)} cabinet(s) affiché(s)`;
+    root.querySelectorAll("th.sortable").forEach((th) => {
+      if (th.dataset.k === ui.key) th.setAttribute("aria-sort", ui.dir > 0 ? "ascending" : "descending");
+      else th.removeAttribute("aria-sort");
+    });
+  }
+
+  // Export tableur (Excel français : séparateur « ; », BOM UTF-8). Une cellule qui commence
+  // par = + - @ serait interprétée comme une FORMULE à l'ouverture : on la neutralise.
+  const csvCell = (v) => {
+    let s = String(v == null ? "" : v);
+    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+    return /[";\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  function downloadCsv() {
+    const lines = ["Cabinet;Participants;En direct;Épisodes;Inscrits"].concat(
+      view().map((r) => [r.n, r.p, r.d, r.e, r.i].map(csvCell).join(";")));
+    const blob = new Blob(["\ufeff" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `cabinets-${doc.scope || "liste"}-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
+  root.addEventListener("click", async (e) => {
+    const th = e.target.closest("th.sortable");
+    if (th) {
+      const k = th.dataset.k;
+      ui.dir = (ui.key === k) ? -ui.dir : (k === "n" ? 1 : -1);   // numérique : le plus grand d'abord
+      ui.key = k;
+      paint();
+      return;
+    }
+    const b = e.target.closest("[data-act]");
+    if (!b) return;
+    if (b.dataset.act === "csv") downloadCsv();
+    else if (b.dataset.act === "lock" && onLock) onLock();
+    else if (b.dataset.act === "copy") {
+      try {
+        await navigator.clipboard.writeText(view().map((r) => r.n).join("\n"));
+        count.textContent = `${intf(view().length)} nom(s) copié(s)`;
+      } catch (err) {
+        count.textContent = "Copie impossible dans ce navigateur.";
+      }
+    }
+  });
+  root.addEventListener("keydown", (e) => {
+    const th = e.target.closest && e.target.closest("th.sortable");
+    if (th && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); th.click(); }
+  });
+  root.querySelector(".firms-q").addEventListener("input", (e) => { ui.q = norm(e.target.value.trim()); paint(); });
+  root.querySelector(".firms-only input").addEventListener("change", (e) => { ui.only = e.target.checked; paint(); });
+  paint();
+  return root;
+}
+
 // Bascule d'onglet (vue lecture) : masque/affiche sans re-rendre tout #app.
 function onReadonlyTabClick(e) {
   const t = e.target.closest(".wtab");
@@ -575,7 +804,7 @@ async function reload() {
 }
 
 // Exposé pour la page admin (site/admin.html), qui réutilise ce rendu.
-window.DASH = { render, reload, state, filterByDate };
+window.DASH = { render, reload, state, filterByDate, renderFirmsView };
 
 // ---- render --------------------------------------------------------------
 // Rend le rapport d'UN webinar, ou d'un GROUPE si `members` est fourni (les

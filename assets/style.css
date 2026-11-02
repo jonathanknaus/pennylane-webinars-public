@@ -169,6 +169,34 @@ body {
 .lock-err { color: #b23b3b; font-weight: 600; }
 .lock-note { margin: 16px 0 0; font-size: 12.5px; }
 
+/* ── Page confidentielle (niveau 2) : liste nominative des cabinets ───────────── */
+/* .tag.tag-conf : spécificité supérieure à .tag, définie PLUS LOIN dans la feuille et sinon gagnante */
+.tag.tag-conf { background: #fde8e8; color: #7a1f1f; }       /* rouge pâle : « sensible » */
+.tag-conf sup { font-size: 9px; }
+.wconf .lockbox { border-left: 4px solid #b23b3b; }       /* second niveau ≠ premier */
+.firms-meta { margin: 0 0 8px; }
+.firms-notes { margin: 0 0 18px; padding-left: 18px; font-size: 12.5px; max-width: 90ch; }
+.firms-notes li { margin-bottom: 3px; }
+.firms-bar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px;
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 10px 14px; box-shadow: var(--shadow); margin-bottom: 12px;
+}
+.firms-q {
+  font: inherit; font-size: 13.5px; padding: 6px 10px; min-width: 240px; flex: 1 1 240px;
+  border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink);
+}
+.firms-q:focus { outline: 2px solid var(--green-light); outline-offset: 0; }
+.firms-only { font-size: 13px; font-weight: 600; color: var(--teal-dark); display: inline-flex; gap: 6px; align-items: center; }
+.firms-only input { accent-color: var(--teal-dark); width: 16px; height: 16px; }
+.firms-count { margin-left: auto; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.firmtable tbody tr { cursor: default; }
+.firmtable td:first-child { font-weight: 600; }
+.firmtable th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+.firmtable th.sortable:hover { color: var(--teal-dark); }
+.firmtable th[aria-sort="ascending"]::after  { content: " ▲"; font-size: 9px; }
+.firmtable th[aria-sort="descending"]::after { content: " ▼"; font-size: 9px; }
+
 /* Verrou seul sur la page (plus rien en clair) : le formulaire EST la page, donc
    on le centre — titre compris — au lieu de le coller à gauche sous une barre
    d'outils absente. */
